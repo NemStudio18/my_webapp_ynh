@@ -1,0 +1,272 @@
+#!/bin/bash
+
+#=================================================
+# GENERIC STARTING
+#=================================================
+# IMPORT GENERIC HELPERS
+#=================================================
+
+source _common.sh
+source /usr/share/yunohost/helpers
+
+ynh_abort_if_errors
+
+#=================================================
+# RETRIEVE ARGUMENTS
+#=================================================
+
+install_dir=$(ynh_app_setting_get --app=$app --key=install_dir)
+domain=$(ynh_app_setting_get --app=$app --key=domain)
+path=$(ynh_app_setting_get --app=$app --key=path)
+
+#=================================================
+# SPECIFIC GETTERS FOR TOML SHORT KEY
+#=================================================
+
+#=================================================
+# SPECIFIC VALIDATORS FOR TOML SHORT KEYS
+#=================================================
+
+#=================================================
+# SPECIFIC SETTERS FOR TOML SHORT KEYS
+#=================================================
+
+set__password() {
+    if [ ! "$password" == "" ]
+    then
+        ynh_app_setting_set --app=$app --key=password --value="$password"
+    fi
+}
+
+#=================================================
+# GENERIC FINALIZATION
+#=================================================
+
+ynh_app_config_validate() {
+    _ynh_app_config_validate
+
+            # If SFTP is enabled but no password provided, generate a random password
+        if [ "${changed[with_sftp]}" == "true" ] && [ $with_sftp -eq 1 ] && [ -z "$password" ]; then
+            ynh_print_info --message="No password provided for SFTP, generating a random password..."
+            password=$(ynh_string_random --length=12)
+            ynh_print_info --message="Generated password: $password - Please save it for SFTP access!"
+            # Store the generated password for post-install display
+            ynh_app_setting_set --app=$app --key=generated_password --value="$password"
+        fi
+
+    # Ensure mode has a default value
+    if [ -z "${mode:-}" ]; then
+        mode=$(ynh_app_setting_get --app=$app --key=mode 2>/dev/null || echo "static")
+    fi
+}
+
+# Get mode from arguments if not set
+if [ -z "${mode:-}" ]; then
+    mode=$YNH_APP_ARG_MODE
+fi
+
+ynh_app_config_apply() {
+    _ynh_app_config_apply
+
+    if [ "${changed[phpversion]}" == "true" ]
+    then
+        if [ "${old[phpversion]}" != "none" ]
+        then
+            ynh_app_setting_set --app=$app --key=phpversion --value="${old[phpversion]}"
+            ynh_remove_fpm_config
+        fi
+        ynh_remove_app_dependencies
+        YNH_PHP_VERSION=$phpversion
+        # ^ ynh_add_config replaces __PHPVERSION__ by __PHP_YNH_VERSION__...
+        ynh_app_setting_set --app=$app --key=phpversion --value="$phpversion"
+
+        database=$(ynh_app_setting_get --app=$app --key=database)
+        dependencies="$(ynh_read_manifest -k "resources.apt.packages")"
+        dependencies_from_raw_bash=$(eval "$(ynh_read_manifest -k "resources.apt.packages_from_raw_bash")" | tr "\n" " ")
+        ynh_install_app_dependencies "$dependencies $dependencies_from_raw_bash"
+
+        nginx_extra_conf_dir="/etc/nginx/conf.d/$domain.d/$app.d"
+        mkdir -p "$nginx_extra_conf_dir"
+        if [ "$phpversion" == "none" ]
+        then
+            ynh_delete_file_checksum --file="$nginx_extra_conf_dir/php.conf"
+            ynh_secure_remove --file="$nginx_extra_conf_dir/php.conf"
+        else
+            ynh_add_config --template="nginx-php.conf" --destination="$nginx_extra_conf_dir/php.conf"
+            ynh_add_fpm_config --phpversion=$phpversion
+            # ^ the helper takes care of ynh_app_setting_set the phpversion
+        fi
+
+        ynh_add_nginx_config
+    fi
+
+    if [ "${changed[with_sftp]}" == "true" ] && [ $with_sftp -eq 1 ]
+    then
+        ynh_system_user_add_group --username=$app --groups="sftp.app"
+
+        # If no password provided, generate a random password
+        if [ -z "$password" ]; then
+            password=$(ynh_string_random --length=12)
+            ynh_print_info --message="Generated password: $password - Please save it for SFTP access!"
+            # Store the generated password for post-install display
+            ynh_app_setting_set --app=$app --key=generated_password --value="$password"
+        fi
+        
+        chpasswd <<< "${app}:${password}"
+    elif [ "${changed[with_sftp]}" == "true" ] && [ $with_sftp -eq 0 ]
+    then
+        ynh_system_user_del_group --username=$app --groups="sftp.app"
+    fi
+    
+    if [ "${changed[password]}" == "true" ] && [ -n "$password" ]
+    then
+        chpasswd <<< "${app}:${password}"
+    fi
+
+    if [ "${changed[custom_error_file]}" == "true" ]
+    then
+        CUSTOM_ERROR_FILE=$custom_error_file
+        nginx_extra_conf_dir="/etc/nginx/conf.d/$domain.d/$app.d"
+
+        if [ $custom_error_file -eq 1 ]
+        then
+            ynh_add_config --template="nginx-code-error.conf" --destination="$nginx_extra_conf_dir/error-code.conf"
+        elif [ $custom_error_file -eq 0 ]
+        then
+            ynh_secure_remove --file="$nginx_extra_conf_dir/error-code.conf"
+        fi
+        ynh_systemd_action --service_name=nginx --action=reload
+    fi
+
+    if [ "${changed[mode]}" == "true" ]
+    then
+        nginx_extra_conf_dir="/etc/nginx/conf.d/$domain.d/$app.d"
+        
+        # Remove old mode configuration
+        old_mode=$(ynh_app_setting_get --app=$app --key=mode)
+        if [ -n "$old_mode" ] && [ "$old_mode" != "$mode" ]
+        then
+            ynh_delete_file_checksum --file="$nginx_extra_conf_dir/$old_mode.conf"
+            ynh_secure_remove --file="$nginx_extra_conf_dir/$old_mode.conf"
+        fi
+        
+        # Add common configuration (always needed)
+        ynh_add_config --template="common.conf" --destination="$nginx_extra_conf_dir/common.conf"
+        
+        # Add new mode configuration (only for non-static modes)
+        if [ "$mode" != "static" ]; then
+            ynh_add_config --template="$mode.conf" --destination="$nginx_extra_conf_dir/$mode.conf"
+        fi
+        
+        # Store the mode setting
+        ynh_app_setting_set --app=$app --key=mode --value="$mode"
+        
+                 # Update source files based on new mode
+         if [ "$mode" = "front" ]
+         then
+             ynh_add_config --template="../sources/www/index_front.php" --destination="$install_dir/www/index.php"
+         elif [ "$mode" = "public" ]
+         then
+             # In public mode, index.php goes in the public directory
+             ynh_add_config --template="../sources/www/index_public.php" --destination="$install_dir/www/public/index.php"
+             # Ensure public directory exists
+             mkdir -p "$install_dir/www/public"
+         else
+             # static mode
+             if [ $with_sftp -eq 1 ]
+             then
+                 ynh_add_config --template="../sources/www/index.html" --destination="$install_dir/www/index.html"
+             else
+                 ynh_add_config --template="../sources/www/index_no_sftp.html" --destination="$install_dir/www/index.html"
+             fi
+         fi
+         
+         # Update connection info files
+         ynh_add_config --template="../sources/www/connection_info.txt" --destination="$install_dir/www/connection_info.txt"
+         ynh_add_config --template="../sources/www/connection_info_fr.txt" --destination="$install_dir/www/connection_info_fr.txt"
+         
+         # Initialize variables for connection info files (GLOBAL for ynh_replace_vars)
+         ssh_port=$(grep "^Port" /etc/ssh/sshd_config | awk '{print $2}' || echo "22")
+         
+         # Ensure all required variables are defined for ynh_replace_vars
+         # These variables are normally set by YunoHost, but we need to ensure they exist
+         if [ -z "${domain:-}" ]; then
+             domain=$(ynh_app_setting_get --app=$app --key=domain 2>/dev/null || echo "unknown")
+         fi
+         if [ -z "${path:-}" ]; then
+             path=$(ynh_app_setting_get --app=$app --key=path 2>/dev/null || echo "/")
+         fi
+         if [ -z "${app:-}" ]; then
+             app=$(ynh_app_setting_get --app=$app --key=app 2>/dev/null || echo "my_webapp")
+         fi
+         if [ -z "${install_dir:-}" ]; then
+             install_dir="/var/www/$app"
+         fi
+         
+         # Replace variables in connection info files
+         ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info.txt"
+         
+         # French version
+         ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info_fr.txt"
+         
+         # Replace __PASSWORD__ in ALL source files
+         if [ -n "$password" ]; then
+             # Connection info files
+             ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info.txt"
+             ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info_fr.txt"
+             
+             # Source files (HTML/PHP)
+             if [ -f "$install_dir/www/index.html" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.html"
+             fi
+             if [ -f "$install_dir/www/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.php"
+             fi
+             # Check for public mode index.php
+             if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/public/index.php"
+             fi
+         else
+             # Connection info files
+             ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/connection_info.txt"
+             ynh_replace_string --match_string="__PASSWORD__" --replace_string="(Aucun mot de passe défini)" --target_file="$install_dir/www/connection_info_fr.txt"
+             
+             # Source files (HTML/PHP)
+             if [ -f "$install_dir/www/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.php"
+             fi
+             if [ -f "$install_dir/www/index.html" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.html"
+             fi
+             # Check for public mode index.php
+             if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/public/index.php"
+             fi
+         fi
+        
+        ynh_systemd_action --service_name=nginx --action=reload
+    else
+        # Ensure mode configuration exists even if not changed
+        nginx_extra_conf_dir="/etc/nginx/conf.d/$domain.d/$app.d"
+        if [ ! -f "$nginx_extra_conf_dir/$mode.conf" ]; then
+            ynh_add_config --template="$mode.conf" --destination="$nginx_extra_conf_dir/$mode.conf"
+        fi
+    fi
+
+    if [ "$phpversion" != "none" ]
+    then
+        ynh_add_fpm_config --phpversion=$phpversion
+    fi
+    
+
+}
+
+ynh_app_config_run $1

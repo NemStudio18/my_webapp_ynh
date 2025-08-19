@@ -1,0 +1,33 @@
+==========================================
+    MY WEBAPP - CONNECTION INFORMATION
+==========================================
+
+🌐 APPLICATION ACCESS
+====================
+URL: https://__DOMAIN____PATH__
+Domain: __DOMAIN__
+Path: __PATH__
+
+🔑 SFTP CONNECTION DETAILS
+==========================
+Host: __DOMAIN__
+Port: __SSH_PORT__
+Username: __ID__
+Password: __PASSWORD__
+
+📁 DIRECTORY STRUCTURE
+======================
+Install Directory: __INSTALL_DIR__
+Web Directory: __INSTALL_DIR__/www/
+Public Directory: __INSTALL_DIR__/www/public/ (if using public mode)
+
+⚠️  IMPORTANT NOTES
+===================
+- If no password was provided during installation, a random password was generated
+- Check your installation logs for the generated password
+- Save your password securely - it cannot be recovered later
+- SFTP access requires the "sftp.app" group permission
+
+==========================================
+YunoHost App: __ID__
+==========================================

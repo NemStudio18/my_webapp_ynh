@@ -1,0 +1,287 @@
+#!/bin/bash
+
+#=================================================
+# GENERIC START
+#=================================================
+# IMPORT GENERIC HELPERS
+#=================================================
+
+source _common.sh
+source /usr/share/yunohost/helpers
+
+#=================================================
+# CHECK VERSION
+#=================================================
+
+upgrade_type=$(ynh_check_app_version_changed)
+
+#=================================================
+# ENSURE DOWNWARD COMPATIBILITY
+#=================================================
+ynh_script_progression --message="Ensuring downward compatibility..."
+
+# If database doesn't exist, create it and remove with_mysql setting
+if [ -z "${database:-}" ]; then
+    if [ $with_mysql -eq 1 ]; then
+        database="mysql"
+    else
+        database="none"
+    fi
+    
+    ynh_app_setting_set --app=$app --key=database --value=$database
+    ynh_app_setting_delete --app=$app --key=with_mysql
+fi
+
+# If admin_mail_html doesn't exist, create it
+if [ -z "${admin_mail_html:-}" ]; then
+	admin_mail_html=1
+		ynh_app_setting_set --app=$app --key=admin_mail_html --value=$admin_mail_html
+fi
+
+# If with_sftp doesn't exist, create it
+if [ -z "${with_sftp:-}" ]; then
+	with_sftp=1
+	ynh_app_setting_set --app=$app --key=with_sftp --value=$with_sftp
+fi
+
+# If phpversion doesn't exist, create it. We assume it is the default system one.
+if [ -z "$phpversion" ]; then
+	phpversion=$YNH_DEFAULT_PHP_VERSION
+	ynh_app_setting_set --app=$app --key=phpversion --value=$phpversion
+fi
+
+# If custom_error_file doesn't exist, create it.
+if [ -z "${custom_error_file:-}" ]; then
+	custom_error_file=0
+	ynh_app_setting_set --app=$app --key=custom_error_file --value=$custom_error_file
+fi
+
+# If mode doesn't exist, create it with default value
+if [ -z "${mode:-}" ]; then
+	mode="static"
+	ynh_app_setting_set --app=$app --key=mode --value=$mode
+fi
+
+# Ensure mode has a value for this upgrade
+if [ -z "${mode:-}" ]; then
+    mode=$(ynh_app_setting_get --app=$app --key=mode 2>/dev/null || echo "static")
+fi
+
+# Get mode from arguments if not set
+if [ -z "${mode:-}" ]; then
+    mode=$YNH_APP_ARG_MODE
+fi
+
+# Delete old user
+if [ -n "$(ynh_app_setting_get --app=$app --key=user)" ]
+then
+    ynh_systemd_action --service_name=php${phpversion}-fpm --action=stop
+    ynh_system_user_delete --username="$(ynh_app_setting_get --app=$app --key=user)"
+    ynh_app_setting_delete --app=$app --key=user
+fi
+
+# Ensure password is a setting even if empty, for the config panel
+ynh_app_setting_set --app=$app --key=password --value="$password"
+
+#=================================================
+# ACTIVATE MAINTENANCE MODE
+#=================================================
+
+ynh_maintenance_mode_ON
+
+#=================================================
+# NGINX CONFIGURATION
+#=================================================
+ynh_script_progression --message="Upgrading NGINX web server configuration..." --weight=2
+
+# Prepare nginx.conf
+nginx_extra_conf_dir="/etc/nginx/conf.d/$domain.d/$app.d"
+
+mkdir -p "$nginx_extra_conf_dir"
+
+# Prepare nginx extra conf
+if [ $phpversion != "none" ]
+then
+    ynh_add_config --template="nginx-php.conf" --destination="$nginx_extra_conf_dir/php.conf"
+    YNH_PHP_VERSION="$phpversion"
+fi
+
+# Add the config error code
+if [ $custom_error_file -eq 1 ]
+then
+    ynh_add_config --template="nginx-code-error.conf" --destination="$nginx_extra_conf_dir/error-code.conf"
+fi
+
+# Create a dedicated NGINX config
+ynh_add_nginx_config
+
+# Get current password from app settings
+password=$(ynh_app_setting_get --app=$app --key=password 2>/dev/null || echo "")
+
+# Add common configuration (always needed)
+ynh_add_config --template="common.conf" --destination="$nginx_extra_conf_dir/common.conf"
+
+# Add the routing mode configuration (only for non-static modes)
+if [ "$mode" != "static" ]; then
+    ynh_add_config --template="$mode.conf" --destination="$nginx_extra_conf_dir/$mode.conf"
+fi
+
+# Store the mode setting
+ynh_app_setting_set --app=$app --key=mode --value="$mode"
+
+                 # Ensure source files match the current mode
+         if [ "$mode" = "front" ]
+         then
+             ynh_add_config --template="../sources/www/index_front.php" --destination="$install_dir/www/index.php"
+         elif [ "$mode" = "public" ]
+         then
+             # In public mode, index.php goes in the public directory
+             ynh_add_config --template="../sources/www/index_public.php" --destination="$install_dir/www/public/index.php"
+             # Ensure public directory exists
+             mkdir -p "$install_dir/www/public"
+         else
+             # static mode
+             if [ $with_sftp -eq 1 ]
+             then
+                 ynh_add_config --template="../sources/www/index.html" --destination="$install_dir/www/index.html"
+             else
+                 ynh_add_config --template="../sources/www/index_no_sftp.html" --destination="$install_dir/www/index.html"
+             fi
+         fi
+        
+                 # Update connection info files
+         ynh_add_config --template="../sources/www/connection_info.txt" --destination="$install_dir/www/connection_info.txt"
+         ynh_add_config --template="../sources/www/connection_info_fr.txt" --destination="$install_dir/www/connection_info_fr.txt"
+         
+         # Initialize variables for connection info files (GLOBAL for ynh_replace_vars)
+         ssh_port=$(grep "^Port" /etc/ssh/sshd_config | awk '{print $2}' || echo "22")
+         
+         # Ensure all required variables are defined for ynh_replace_vars
+         # These variables are normally set by YunoHost, but we need to ensure they exist
+         if [ -z "${domain:-}" ]; then
+             domain=$(ynh_app_setting_get --app=$app --key=domain 2>/dev/null || echo "unknown")
+         fi
+         if [ -z "${path:-}" ]; then
+             path=$(ynh_app_setting_get --app=$app --key=path 2>/dev/null || echo "/")
+         fi
+         if [ -z "${app:-}" ]; then
+             app=$(ynh_app_setting_get --app=$app --key=app 2>/dev/null || echo "my_webapp")
+         fi
+         if [ -z "${install_dir:-}" ]; then
+             install_dir="/var/www/$app"
+         fi
+        
+                 # Replace variables in connection info files
+         ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info.txt"
+         ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info.txt"
+         
+         # French version
+         ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info_fr.txt"
+         ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info_fr.txt"
+         
+         # Replace __PASSWORD__ in ALL source files
+         if [ -n "$password" ]; then
+             # Connection info files
+             ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info.txt"
+             ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info_fr.txt"
+            
+                         # Source files (HTML/PHP)
+             if [ -f "$install_dir/www/index.html" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.html"
+             fi
+             if [ -f "$install_dir/www/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.php"
+             fi
+             # Check for public mode index.php
+             if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/public/index.php"
+             fi
+        else
+            # Connection info files
+            ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/connection_info.txt"
+            ynh_replace_string --match_string="__PASSWORD__" --replace_string="(Aucun mot de passe défini)" --target_file="$install_dir/www/connection_info_fr.txt"
+            
+                         # Source files (HTML/PHP)
+             if [ -f "$install_dir/www/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.php"
+             fi
+             if [ -f "$install_dir/www/index.html" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.html"
+             fi
+             # Check for public mode index.php
+             if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
+                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/public/index.php"
+             fi
+        fi
+
+ynh_add_config --template="example-custom-nginx-config.conf" --destination="$nginx_extra_conf_dir/sample.conf"
+
+#=================================================
+# CREATE DEDICATED USER
+#=================================================
+ynh_script_progression --message="Making sure dedicated system user exists..." --weight=2
+
+if [ $with_sftp -eq 1 ]
+then
+    groups="sftp.app"
+else
+    groups=""
+fi
+
+ynh_system_user_create --username=$app --home_dir="$install_dir" --groups="$groups"
+
+if [ -n "$password" ]
+then
+    # Add the password to this user
+    chpasswd <<< "${app}:${password}"
+fi
+
+# Change the user group for previous my_webapp install script
+groupadd -f "$app"
+usermod -g "$app" "$app"
+
+#=================================================
+# PHP-FPM CONFIGURATION
+#=================================================
+
+if [ $phpversion != "none" ]
+then
+    ynh_script_progression --message="Upgrading PHP-FPM configuration..." --weight=2
+
+    # Create a dedicated PHP-FPM config
+    ynh_add_fpm_config
+fi
+
+#=================================================
+# GENERIC FINALIZATION
+#=================================================
+# SECURE FILES AND DIRECTORIES
+#=================================================
+
+chown -R $app:www-data "$install_dir"
+# Home directory of the user needs to be owned by root to allow
+# SFTP connections
+chown root:root "$install_dir"
+setfacl -m g:$app:r-x "$install_dir"
+setfacl -m g:www-data:r-x "$install_dir"
+chmod 750 "$install_dir"
+
+#=================================================
+# DEACTIVE MAINTENANCE MODE
+#=================================================
+
+ynh_maintenance_mode_OFF
+
+
+
+#=================================================
+# END OF SCRIPT
+#=================================================
+
+ynh_script_progression --message="Upgrade of $app completed" --last
