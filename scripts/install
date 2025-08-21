@@ -23,15 +23,6 @@ ssh_port=$(grep "^Port" /etc/ssh/sshd_config | awk '{print $2}' || echo "22")
 #=================================================
 ynh_script_progression --message="Validating installation parameters..." --weight=2
 
-        # If SFTP is enabled but no password provided, generate a random password
-        if [ $with_sftp -eq 1 ] && [ -z "$password" ]; then
-            ynh_print_info --message="No password provided for SFTP, generating a random password..."
-            password=$(ynh_string_random --length=12)
-            ynh_print_info --message="Generated password: $password - Please save it for SFTP access!"
-            # Store the generated password for post-install display
-            ynh_app_setting_set --app=$app --key=generated_password --value="$password"
-        fi
-
 # Ensure mode has a default value
 if [ -z "${mode:-}" ]; then
     mode="static"
@@ -41,8 +32,6 @@ fi
 # STORE SETTINGS FROM MANIFEST
 #=================================================
 ynh_script_progression --message="Storing installation settings..." --weight=1
-
-ynh_app_setting_set --app=$app --key=password --value=$password
 
 #=================================================
 # CREATE A MYSQL DATABASE
@@ -103,8 +92,6 @@ fi
         
         ynh_add_config --template="example-custom-nginx-config.conf" --destination="$nginx_extra_conf_dir/sample.conf"
         
-
-
 #=================================================
 # CREATE DEDICATED USER
 #=================================================
@@ -118,20 +105,6 @@ else
 fi
 
     ynh_system_user_create --username=$app --home_dir="$install_dir" --groups="$groups"
-
-if [ $with_sftp -eq 1 ]
-then
-            # If no password provided, generate a random password
-        if [ -z "$password" ]; then
-            password=$(ynh_string_random --length=12)
-            ynh_print_info --message="Generated password: $password - Please save it for SFTP access!"
-            # Store the generated password for post-install display
-            ynh_app_setting_set --app=$app --key=generated_password --value="$password"
-        fi
-    
-    # Add the password to this user
-    chpasswd <<< "${app}:${password}"
-fi
 
 #=================================================
 # SPECIFIC SETUP
@@ -179,96 +152,21 @@ fi
         ynh_add_config --template="../sources/www/connection_info.txt" --destination="$install_dir/www/connection_info.txt"
         ynh_add_config --template="../sources/www/connection_info_fr.txt" --destination="$install_dir/www/connection_info_fr.txt"
         
-        # Initialize variables for connection info files (GLOBAL for ynh_replace_vars)
-        
-        # Ensure all required variables are defined for ynh_replace_vars
-        # These variables are normally set by YunoHost, but we need to ensure they exist
-        if [ -z "${domain:-}" ]; then
-            domain=$(ynh_app_setting_get --app=$app --key=domain 2>/dev/null || echo "unknown")
-        fi
-        if [ -z "${path:-}" ]; then
-            path=$(ynh_app_setting_get --app=$app --key=path 2>/dev/null || echo "/")
-        fi
-        if [ -z "${app:-}" ]; then
-            app=$(ynh_app_setting_get --app=$app --key=app 2>/dev/null || echo "my_webapp")
-        fi
-        if [ -z "${install_dir:-}" ]; then
-            install_dir="/var/www/$app"
+        # If SFTP is enabled but no password provided, generate a random password
+        if [ $with_sftp -eq 1 ] && [ -z "$password" ]; then
+            password=$(ynh_string_random --length=12)
+            ynh_print_info --message="No password provided for SFTP, generating a random password..."
+            ynh_print_info --message="Generated password: $password - Please save it for SFTP access!"
         fi
         
-        # Replace variables in connection info files
-        ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info.txt"
-        ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info.txt"
-        ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info.txt"
-        ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info.txt"
-        ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info.txt"
-        
-        # Replace MySQL variables in connection info files
-        if [ -n "${db_name:-}" ]; then
-            ynh_replace_string --match_string="__DB_NAME__" --replace_string="$db_name" --target_file="$install_dir/www/connection_info.txt"
-            ynh_replace_string --match_string="__DB_USER__" --replace_string="$db_user" --target_file="$install_dir/www/connection_info.txt"
-            ynh_replace_string --match_string="__DB_PWD__" --replace_string="$db_pwd" --target_file="$install_dir/www/connection_info.txt"
+        # Store the password setting only if SFTP is enabled
+        if [ $with_sftp -eq 1 ]; then
+            ynh_app_setting_set --app=$app --key=password --value="$password"
         fi
         
-        # French version
-        ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info_fr.txt"
-        ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info_fr.txt"
-        ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info_fr.txt"
-        ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info_fr.txt"
-        ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info_fr.txt"
-        
-        # Replace MySQL variables in French connection info files
-        if [ -n "${db_name:-}" ]; then
-            ynh_replace_string --match_string="__DB_NAME__" --replace_string="$db_name" --target_file="$install_dir/www/connection_info_fr.txt"
-            ynh_replace_string --match_string="__DB_USER__" --replace_string="$db_user" --target_file="$install_dir/www/connection_info_fr.txt"
-            ynh_replace_string --match_string="__DB_PWD__" --replace_string="$db_pwd" --target_file="$install_dir/www/connection_info_fr.txt"
-        fi
-        
-        # Replace __PASSWORD__ in ALL source files
-        if [ -n "$password" ]; then
-            # Connection info files
-            ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info.txt"
-            ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info_fr.txt"
-            
-            # Source files (HTML/PHP)
-            if [ -f "$install_dir/www/index.html" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.html"
-            fi
-            if [ -f "$install_dir/www/index.php" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.php"
-            fi
-            # Check for public mode index.php
-            if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/public/index.php"
-            fi
-        else
-            # Connection info files
-            ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/connection_info.txt"
-            ynh_replace_string --match_string="__PASSWORD__" --replace_string="(Aucun mot de passe défini)" --target_file="$install_dir/www/connection_info_fr.txt"
-            
-            # Source files (HTML/PHP)
-            if [ -f "$install_dir/www/index.php" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.php"
-            fi
-            if [ -f "$install_dir/www/index.html" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.html"
-            fi
-            # Check for public mode index.php
-            if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/public/index.php"
-            fi
-            
-            # Source files (HTML/PHP)
-            if [ -f "$install_dir/www/index.php" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.php"
-            fi
-            if [ -f "$install_dir/www/index.html" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.html"
-            fi
-            # Check for public mode index.php
-            if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
-                ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/public/index.php"
-            fi
+        # Set password for SFTP user if enabled
+        if [ $with_sftp -eq 1 ] && [ -n "$password" ]; then
+            chpasswd <<< "${app}:${password}"
         fi
 
 chown -R $app:www-data "$install_dir"

@@ -11,7 +11,7 @@ Votre application **My Webapp** a été installée et est maintenant prête à l
 
 ### **Notes Importantes :**
 - Si vous n'avez pas fourni de mot de passe lors de l'installation, un mot de passe sécurisé aléatoire a été généré
-- **Mot de passe généré :** `__GENERATED_PASSWORD__`
+- **Mot de passe généré :** `__PASSWORD__`
 - Veuillez sauvegarder ce mot de passe en lieu sûr - il ne peut pas être récupéré ultérieurement !
 - **Port SSH :** Port SSH standard (généralement 22) - vérifiez la configuration de votre serveur si différent
 

@@ -11,7 +11,7 @@ Your **My Webapp** application has been installed and is now ready to use!
 
 ### **Important Notes:**
 - If you didn't provide a password during installation, a secure random password was generated
-- **Generated Password:** `__GENERATED_PASSWORD__`
+- **Generated Password:** `__PASSWORD__`
 - Please save this password securely - it cannot be recovered later!
 - **SSH Port:** Standard SSH port (usually 22) - check your server configuration if different
 

@@ -171,54 +171,11 @@ ynh_app_setting_set --app=$app --key=mode --value="$mode"
              install_dir="/var/www/$app"
          fi
         
-                 # Replace variables in connection info files
-         ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info.txt"
-         ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info.txt"
-         ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info.txt"
-         ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info.txt"
-         ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info.txt"
+         # Update connection info files (templates handle variables automatically)
+         ynh_add_config --template="../sources/www/connection_info.txt" --destination="$install_dir/www/connection_info.txt"
+         ynh_add_config --template="../sources/www/connection_info_fr.txt" --destination="$install_dir/www/connection_info_fr.txt"
          
-         # French version
-         ynh_replace_string --match_string="__DOMAIN__" --replace_string="$domain" --target_file="$install_dir/www/connection_info_fr.txt"
-         ynh_replace_string --match_string="__PATH__" --replace_string="$path" --target_file="$install_dir/www/connection_info_fr.txt"
-         ynh_replace_string --match_string="__SSH_PORT__" --replace_string="$ssh_port" --target_file="$install_dir/www/connection_info_fr.txt"
-         ynh_replace_string --match_string="__ID__" --replace_string="$app" --target_file="$install_dir/www/connection_info_fr.txt"
-         ynh_replace_string --match_string="__INSTALL_DIR__" --replace_string="$install_dir" --target_file="$install_dir/www/connection_info_fr.txt"
-         
-         # Replace __PASSWORD__ in ALL source files
-         if [ -n "$password" ]; then
-             # Connection info files
-             ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info.txt"
-             ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/connection_info_fr.txt"
-            
-                         # Source files (HTML/PHP)
-             if [ -f "$install_dir/www/index.html" ]; then
-                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.html"
-             fi
-             if [ -f "$install_dir/www/index.php" ]; then
-                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/index.php"
-             fi
-             # Check for public mode index.php
-             if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
-                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="$password" --target_file="$install_dir/www/public/index.php"
-             fi
-        else
-            # Connection info files
-            ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/connection_info.txt"
-            ynh_replace_string --match_string="__PASSWORD__" --replace_string="(Aucun mot de passe défini)" --target_file="$install_dir/www/connection_info_fr.txt"
-            
-                         # Source files (HTML/PHP)
-             if [ -f "$install_dir/www/index.php" ]; then
-                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.php"
-             fi
-             if [ -f "$install_dir/www/index.html" ]; then
-                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/index.html"
-             fi
-             # Check for public mode index.php
-             if [ "$mode" = "public" ] && [ -f "$install_dir/www/public/index.php" ]; then
-                 ynh_replace_string --match_string="__PASSWORD__" --replace_string="(No password set)" --target_file="$install_dir/www/public/index.php"
-             fi
-        fi
+         # Templates handle __PASSWORD__ replacement automatically via ynh_add_config
 
 ynh_add_config --template="example-custom-nginx-config.conf" --destination="$nginx_extra_conf_dir/sample.conf"
 
